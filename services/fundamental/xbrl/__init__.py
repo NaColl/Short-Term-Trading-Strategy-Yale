@@ -1,0 +1,1 @@
+"""APEX xbrl subpackage."""

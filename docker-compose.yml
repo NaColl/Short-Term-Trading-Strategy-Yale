@@ -1,0 +1,176 @@
+version: "3.9"
+
+services:
+  # ── Infrastructure ───────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_AUTH_USER:-apex}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_AUTH_PASSWORD:-apex_dev}
+      - GENERIC_TIMEZONE=America/New_York
+      - TZ=America/New_York
+      # APEX service URLs (for workflow HTTP nodes)
+      - CLASSIFICATION_SERVICE_URL=http://detection:8001
+      - FUNDAMENTAL_SERVICE_URL=http://fundamental:8002
+      - SIGNAL_SERVICE_URL=http://signals:8003
+      - RISK_SERVICE_URL=http://risk:8004
+      - REPORTING_SERVICE_URL=http://execution:8005
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - APEX_ENV=${APEX_ENV:-paper}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-apex_dev}
+
+  # ── Python Microservices ─────────────────────────────────────
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A shared.celery.app:celery_app worker -l info -Q ingest -c 4
+    env_file: .env
+    environment:
+      - APEX_SERVICE=ingest
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  detection:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.detection.app:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=detection
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  fundamental:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.fundamental.app:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=fundamental
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  signals:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.signals.app:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=signals
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  risk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.risk.app:app --host 0.0.0.0 --port 8004
+    ports:
+      - "8004:8004"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=risk
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  execution:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn services.execution.app:app --host 0.0.0.0 --port 8005
+    ports:
+      - "8005:8005"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=execution
+      - IBKR_CLIENT_ID=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery Beat Scheduler ────────────────────────────────────
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A shared.celery.app:celery_app beat -l info
+    env_file: .env
+    environment:
+      - APEX_SERVICE=scheduler
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Dashboard ────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: streamlit run services/dashboard/Home.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file: .env
+    environment:
+      - APEX_SERVICE=dashboard
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  n8n_data:
+  grafana_data:
